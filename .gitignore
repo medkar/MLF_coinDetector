@@ -19,3 +19,6 @@ desktop.ini
 # Logs et temporaires
 *.log
 *.tmp
+
+# Arduino App Lab (fichiers générés sur la carte)
+.cache/
