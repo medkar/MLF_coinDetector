@@ -1,0 +1,8 @@
+name: MLF_CoinDetector
+description: This example showcases object detection within a live feed from a USB camera.
+ports: []
+bricks:
+- arduino:video_object_detection:
+    model: ei-model-1054574-2
+- arduino:web_ui: {}
+icon: 📽️
