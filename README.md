@@ -6,7 +6,6 @@ The end goal is to send the identified pucks (color + position) to a **ROS robot
 
 > ⚠️ **Status: proof of concept (POC).** The project started from the Arduino App Lab _"Detect Objects on Camera"_ example and is being adapted. The web UI (animations, texts) is still partly inherited from the original example.
 
-![Object detection on camera](assets/docs_assets/video-object-detection.png)
 
 ## Overview
 
