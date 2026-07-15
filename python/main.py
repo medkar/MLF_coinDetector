@@ -58,6 +58,12 @@ SAT_MIN = 60      # saturation minimale d'un pixel "coloré"
 VAL_MIN = 40      # valeur (luminosité) minimale
 MIN_AREA = 20     # aire minimale du contour retenu (px²)
 
+# --- Détection auto des cibles concentriques de la mire (ajustable) ---
+TARGET_MIN_AREA = 15       # aire mini d'un anneau (px²)
+TARGET_MAX_AREA = 20000    # aire maxi (exclut le contour du plateau)
+TARGET_CLUSTER_TOL = 12    # px : regroupement des contours concentriques (même centre)
+TARGET_MIN_RINGS = 3       # nb mini de contours empilés pour valider une cible
+
 
 # ---------------------------------------------------------------------------
 # Affinage : centre sub-pixel du disque coloré autour de la cellule FOMO
@@ -352,6 +358,76 @@ def on_calib_get_refined(sid, payload=None):
 
 
 # ---------------------------------------------------------------------------
+# Calibration — détection automatique des cibles concentriques
+# ---------------------------------------------------------------------------
+def _order_corners(pts):
+  a = np.array(pts, dtype=np.float64)
+  s = a[:, 0] + a[:, 1]
+  d = a[:, 1] - a[:, 0]
+  # ordre : haut-gauche, haut-droit, bas-droit, bas-gauche
+  return [a[np.argmin(s)].tolist(), a[np.argmin(d)].tolist(),
+          a[np.argmax(s)].tolist(), a[np.argmax(d)].tolist()]
+
+
+def detect_targets(frame_bgr):
+  """Détecte les centres des cibles concentriques (bullseyes). Retourne (corners|None, candidates)."""
+  gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+  gray = cv2.GaussianBlur(gray, (3, 3), 0)
+  thr = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                              cv2.THRESH_BINARY_INV, 51, 5)
+  cnts, _ = cv2.findContours(thr, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+  # centroïdes des contours de taille plausible
+  cents = []
+  for c in cnts:
+    a = cv2.contourArea(c)
+    if a < TARGET_MIN_AREA or a > TARGET_MAX_AREA:
+      continue
+    m = cv2.moments(c)
+    if m["m00"] == 0:
+      continue
+    cents.append((m["m10"] / m["m00"], m["m01"] / m["m00"]))
+
+  # regroupe les centres proches : une cible = plusieurs anneaux au même centre
+  clusters = []  # [somme_x, somme_y, n]
+  for (x, y) in cents:
+    placed = False
+    for cl in clusters:
+      cx, cy = cl[0] / cl[2], cl[1] / cl[2]
+      if (x - cx) ** 2 + (y - cy) ** 2 <= TARGET_CLUSTER_TOL ** 2:
+        cl[0] += x; cl[1] += y; cl[2] += 1
+        placed = True
+        break
+    if not placed:
+      clusters.append([x, y, 1])
+
+  markers = [(cl[0] / cl[2], cl[1] / cl[2]) for cl in clusters if cl[2] >= TARGET_MIN_RINGS]
+  candidates = [[round(mx, 1), round(my, 1)] for (mx, my) in markers]
+  corners = None
+  if len(markers) >= 4:
+    corners = [[round(c[0], 1), round(c[1], 1)] for c in _order_corners(markers)]
+  log.info(f"[calib-auto] contours_plausibles={len(cents)} cibles={len(markers)} corners={'oui' if corners else 'non'}")
+  return corners, candidates
+
+
+def on_calib_auto_detect(sid, payload=None):
+  frame, source = _grab_frame()
+  if frame is None:
+    ui.send_message("calib_auto_result", message={"ok": False, "error": "Aucune image disponible."})
+    return
+  h, w = int(frame.shape[0]), int(frame.shape[1])
+  corners, candidates = detect_targets(frame)
+  ok_enc, buf = cv2.imencode(".jpg", frame)
+  img = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode("ascii") if ok_enc else None
+  ui.send_message("calib_auto_result", message={
+    "ok": corners is not None,
+    "w": w, "h": h, "img": img,
+    "corners": corners, "candidates": candidates,
+    "error": None if corners is not None else f"{len(candidates)} cible(s) détectée(s) — il en faut 4.",
+  })
+
+
+# ---------------------------------------------------------------------------
 # Servo — configuration depuis l'UI + test manuel
 # ---------------------------------------------------------------------------
 def on_servo_get(sid, payload=None):
@@ -386,6 +462,7 @@ ui.on_message("calib_capture", on_calib_capture)
 ui.on_message("calib_compute", on_calib_compute)
 ui.on_message("calib_test_point", on_calib_test_point)
 ui.on_message("calib_get_refined", on_calib_get_refined)
+ui.on_message("calib_auto_detect", on_calib_auto_detect)
 ui.on_message("servo_get", on_servo_get)
 ui.on_message("servo_config", on_servo_config)
 ui.on_message("servo_test", on_servo_test)

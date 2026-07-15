@@ -232,6 +232,8 @@ let calibImage = null; // Image capturée
 let calibPoints = []; // 4 coins cliqués [[u,v], ...]
 let calibrated = false; // homographie disponible ?
 let testPoints = []; // points de test { u, v, X, Y }
+let autoCandidates = []; // cibles candidates détectées (rouge)
+let autoCorners = []; // 4 coins retenus (vert), ordre TL,TR,BR,BL
 
 const CORNER_LABELS = ['haut-gauche', 'haut-droit', 'bas-droit', 'bas-gauche'];
 
@@ -253,6 +255,8 @@ function calibRedraw() {
   const ctx = calibCanvas.getContext('2d');
   ctx.clearRect(0, 0, calibCanvas.width, calibCanvas.height);
   if (calibImage) ctx.drawImage(calibImage, 0, 0, calibCanvas.width, calibCanvas.height);
+  autoCandidates.forEach(p => drawMarker(ctx, p[0], p[1], '#ff5252', ''));
+  autoCorners.forEach((p, i) => drawMarker(ctx, p[0], p[1], '#00e676', String(i + 1)));
   calibPoints.forEach((p, i) => drawMarker(ctx, p[0], p[1], '#00e676', String(i + 1)));
   testPoints.forEach(t => drawMarker(ctx, t.u, t.v, '#ffd600', `${t.X},${t.Y}mm`));
 }
@@ -277,6 +281,9 @@ if (calibResetBtn) {
     calibPoints = [];
     calibrated = false;
     testPoints = [];
+    autoCandidates = [];
+    autoCorners = [];
+    if (calibAutoSaveBtn) calibAutoSaveBtn.style.display = 'none';
     calibResult.textContent = '';
     calibStatus.textContent = 'Clique les 4 coins : ' + CORNER_LABELS.join(', ') + '.';
     calibRedraw();
@@ -317,6 +324,9 @@ ui.on_message('calib_frame', message => {
     calibPoints = [];
     calibrated = false;
     testPoints = [];
+    autoCandidates = [];
+    autoCorners = [];
+    if (calibAutoSaveBtn) calibAutoSaveBtn.style.display = 'none';
     calibResult.textContent = '';
     calibCanvas.width = message.w;
     calibCanvas.height = message.h;
@@ -348,6 +358,56 @@ ui.on_message('calib_test_result', message => {
   if (!message || !message.ok) return;
   testPoints.push({ u: message.u, v: message.v, X: message.X, Y: message.Y });
   calibRedraw();
+});
+
+// --- Auto-calibration : détection des cibles concentriques ---
+const calibAutoBtn = document.getElementById('calibAutoBtn');
+const calibAutoSaveBtn = document.getElementById('calibAutoSaveBtn');
+
+if (calibAutoBtn) {
+  calibAutoBtn.addEventListener('click', () => {
+    calibStatus.textContent = 'Détection des cibles…';
+    ui.send_message('calib_auto_detect', {});
+  });
+}
+
+if (calibAutoSaveBtn) {
+  calibAutoSaveBtn.addEventListener('click', () => {
+    if (autoCorners.length !== 4) return;
+    const square = parseFloat(calibSquareInput.value) || 174;
+    calibStatus.textContent = 'Enregistrement (auto)…';
+    ui.send_message('calib_compute', { points: autoCorners, square_mm: square });
+  });
+}
+
+ui.on_message('calib_auto_result', message => {
+  if (!message) return;
+  autoCandidates = message.candidates || [];
+  autoCorners = message.ok && message.corners ? message.corners : [];
+  calibPoints = [];
+  testPoints = [];
+  const applyMarkers = () => {
+    calibRedraw();
+    if (message.ok) {
+      calibStatus.textContent = '4 cibles détectées (vert, ordre 1→4). Vérifie puis clique « Enregistrer (auto) ».';
+      if (calibAutoSaveBtn) calibAutoSaveBtn.style.display = '';
+    } else {
+      calibStatus.textContent = 'Détection auto : ' + (message.error || 'échec') + ' (rouge = candidats trouvés).';
+      if (calibAutoSaveBtn) calibAutoSaveBtn.style.display = 'none';
+    }
+  };
+  if (message.img) {
+    const img = new Image();
+    img.onload = () => {
+      calibImage = img;
+      calibCanvas.width = message.w;
+      calibCanvas.height = message.h;
+      applyMarkers();
+    };
+    img.src = message.img;
+  } else {
+    applyMarkers();
+  }
 });
 
 // --- Calibration par palet (annule la parallaxe) ---
