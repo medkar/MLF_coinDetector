@@ -96,10 +96,11 @@ SPDX-License-Identifier: MPL-2.0
         </div>
       </div>
 
-      <div class="container" id="calibration-container" style="margin-top: 16px">
-        <div class="recent-scans-title-container">
-          <h2 class="recent-scans-title">Calibration (repère palet)</h2>
-        </div>
+      <div style="display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; margin-top: 16px">
+        <div class="container" id="calibration-container" style="flex: 1; min-width: 320px">
+          <div class="recent-scans-title-container">
+            <h2 class="recent-scans-title">Calibration (repère palet)</h2>
+          </div>
         <div style="display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap">
           <div style="min-width: 260px; max-width: 340px">
             <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 10px">
@@ -148,9 +149,9 @@ SPDX-License-Identifier: MPL-2.0
           </div>
           <p id="calibPuckStatus" class="feedback-text" style="margin-top: 10px"></p>
         </div>
-      </div>
+        </div>
 
-      <div class="container" id="servo-container" style="margin-top: 16px">
+        <div class="container" id="servo-container" style="flex: 1; min-width: 320px">
         <div class="recent-scans-title-container">
           <h2 class="recent-scans-title">Servo « flèche » (pointe vers le palet)</h2>
         </div>
@@ -188,7 +189,7 @@ SPDX-License-Identifier: MPL-2.0
           </div>
         </div>
       </div>
-
+      </div>
       <div id="error-container" class="error-message" style="display: none"></div>
     </div>
 
