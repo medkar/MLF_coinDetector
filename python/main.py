@@ -22,7 +22,15 @@ ui = WebUI()
 cam = Camera()
 detection_stream = VideoObjectDetection(camera=cam, confidence=0.5, debounce_sec=0.0, camera_preview=True)
 
-ui.on_message("override_th", lambda sid, threshold: detection_stream.override_threshold(threshold))
+def on_override_threshold(sid, threshold):
+  # Au démarrage, l'UI peut envoyer le seuil avant que le runner du modèle soit
+  # prêt (ws:4912) -> on ignore proprement au lieu de logguer une stack trace.
+  try:
+    detection_stream.override_threshold(threshold)
+  except Exception as e:
+    log.warning(f"[detection] override_threshold ignoré (runner pas prêt ?): {e}")
+
+ui.on_message("override_th", on_override_threshold)
 
 # État de calibration (homographie pixel -> mm)
 CALIB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "calibration.json")
