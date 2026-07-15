@@ -13,6 +13,7 @@ import time
 import json
 import math
 import base64
+import socket
 import cv2
 import numpy as np
 
@@ -50,6 +51,13 @@ _servo_smooth = {"angle": None}          # angle lissé (EMA)
 MIN_SERVO_INTERVAL = 0.05  # le pont MCU n'a pas de file d'attente : ~20 cmd/s max
 SERVO_SMOOTH_ALPHA = 0.4   # lissage EMA (plus petit = plus lisse mais plus lent)
 SERVO_DEADBAND = 2         # ne commande pas le servo pour un changement < ce seuil (°)
+
+# --- Téléop ROS2 (branche dev) : le palet agit comme un joystick, envoyé en UDP ---
+# Le noeud ROS2 (mlf_coin_teleop) reçoit {jx, jy} et publie /cmd_vel vers le Waffle.
+ROS_ENABLED = True
+WAFFLE_HOST = "192.168.1.50"   # IP de la machine qui fait tourner le noeud ROS2 (À ADAPTER)
+WAFFLE_PORT = 5005
+_ros_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
 # --- Paramètres de l'affinage OpenCV (ajustables d'après les logs) ---
 REFINE_ROI = 70   # demi-fenêtre d'analyse autour du centre FOMO (px)
@@ -171,6 +179,24 @@ def _servo_point(raw_angle):
   _servo_send(target)
 
 
+def _send_joystick(xp, yp):
+  """Envoie la position du palet comme un vecteur joystick {jx, jy} en UDP au noeud ROS2.
+
+  Repère mire : centre = neutre (stop), haut = avant (jy>0), droite = tourner à droite (jx>0).
+  """
+  if not ROS_ENABLED:
+    return
+  sq = float(square_mm_current or 174.0)
+  half = sq / 2.0
+  jx = max(-1.0, min(1.0, (xp - half) / half))   # droite = +1
+  jy = max(-1.0, min(1.0, (half - yp) / half))   # haut / avant = +1
+  try:
+    _ros_sock.sendto(json.dumps({"jx": round(jx, 3), "jy": round(jy, 3)}).encode("utf-8"),
+                     (WAFFLE_HOST, WAFFLE_PORT))
+  except Exception as e:
+    log.warning(f"[ros] envoi UDP échoué: {e}")
+
+
 # ---------------------------------------------------------------------------
 # Détection -> affinage -> localisation (X,Y) mm -> UI (+ servo)
 # ---------------------------------------------------------------------------
@@ -225,6 +251,8 @@ def send_detections_to_ui(detections: dict, frame=None):
 
   if SERVO["enabled"] and best is not None:
     _servo_point(compute_servo_angle(best[1], best[2]))
+  if ROS_ENABLED and best is not None:
+    _send_joystick(best[1], best[2])
 
 detection_stream.on_detect_all(send_detections_to_ui)
 
