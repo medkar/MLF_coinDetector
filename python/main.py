@@ -43,10 +43,13 @@ _last_refined = {"u": None, "v": None, "t": 0.0, "label": None, "refined": False
 
 # --- Servo "flèche" qui pointe vers le palet (piloté via le MCU / Bridge) ---
 SERVO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "servo_config.json")
-# Position du servo dans le repère mm de la mire (par défaut : milieu du bord supérieur).
-SERVO = {"x": 87.0, "y": 0.0, "offset": 0.0, "invert": False, "enabled": True}
+# Position du servo dans le repère mm de la mire (par défaut : milieu du bord inférieur).
+SERVO = {"x": 87.0, "y": 174.0, "offset": 0.0, "invert": False, "enabled": True}
 _servo_state = {"angle": None, "t": 0.0}
+_servo_smooth = {"angle": None}          # angle lissé (EMA)
 MIN_SERVO_INTERVAL = 0.05  # le pont MCU n'a pas de file d'attente : ~20 cmd/s max
+SERVO_SMOOTH_ALPHA = 0.4   # lissage EMA (plus petit = plus lisse mais plus lent)
+SERVO_DEADBAND = 2         # ne commande pas le servo pour un changement < ce seuil (°)
 
 # --- Paramètres de l'affinage OpenCV (ajustables d'après les logs) ---
 REFINE_ROI = 70   # demi-fenêtre d'analyse autour du centre FOMO (px)
@@ -126,9 +129,17 @@ def _save_servo_config():
 
 
 def compute_servo_angle(xp, yp):
-  # Angle géométrique : 0° = +X (droite), 90° = +Y (vers le bas du repère), 180° = -X (gauche).
-  base = math.degrees(math.atan2(yp - SERVO["y"], xp - SERVO["x"]))
-  ang = SERVO["offset"] + (-base if SERVO["invert"] else base)
+  # Angle robuste quelle que soit la position du servo (milieu d'un bord) :
+  # on mesure la direction vers le palet RELATIVEMENT à la direction "vers le
+  # centre de la mire" (= 90°, la flèche pointe alors au milieu du terrain),
+  # avec repli à ±180°. offset/invert servent au calage physique.
+  sq = float(square_mm_current or 174.0)
+  cx = cy = sq / 2.0
+  forward = math.atan2(cy - SERVO["y"], cx - SERVO["x"])
+  base = math.atan2(yp - SERVO["y"], xp - SERVO["x"])
+  rel = math.degrees(base - forward)
+  rel = ((rel + 180.0) % 360.0) - 180.0          # repli dans (-180, 180]
+  ang = 90.0 + SERVO["offset"] + (-rel if SERVO["invert"] else rel)
   return int(max(0, min(180, round(ang))))
 
 
@@ -146,6 +157,18 @@ def _servo_send(angle, force=False):
     ui.send_message("servo_state", message={"angle": int(angle)})
   except Exception as e:
     log.warning(f"[servo] Bridge.notify a échoué (MCU/sketch prêt ?): {e}")
+
+
+def _servo_point(raw_angle):
+  """Lisse l'angle (EMA + zone morte) avant de commander le servo -> moins de jitter."""
+  s = _servo_smooth["angle"]
+  s = float(raw_angle) if s is None else (SERVO_SMOOTH_ALPHA * raw_angle + (1 - SERVO_SMOOTH_ALPHA) * s)
+  _servo_smooth["angle"] = s
+  target = int(round(s))
+  last = _servo_state["angle"]
+  if last is not None and abs(target - last) < SERVO_DEADBAND:
+    return
+  _servo_send(target)
 
 
 # ---------------------------------------------------------------------------
@@ -201,7 +224,7 @@ def send_detections_to_ui(detections: dict, frame=None):
       ui.send_message("detection", message=entry)
 
   if SERVO["enabled"] and best is not None:
-    _servo_send(compute_servo_angle(best[1], best[2]))
+    _servo_point(compute_servo_angle(best[1], best[2]))
 
 detection_stream.on_detect_all(send_detections_to_ui)
 
@@ -353,6 +376,7 @@ def on_servo_config(sid, payload):
 def on_servo_test(sid, payload):
   try:
     angle = int(payload.get("angle")) if isinstance(payload, dict) else int(payload)
+    _servo_smooth["angle"] = float(angle)  # resynchronise le lissage
     _servo_send(angle, force=True)
   except Exception as e:
     log.warning(f"[servo] test échoué: {e}")
