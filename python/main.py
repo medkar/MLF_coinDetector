@@ -7,6 +7,16 @@ from arduino.app_bricks.web_ui import WebUI
 from arduino.app_bricks.video_objectdetection import VideoObjectDetection
 from datetime import datetime, UTC
 
+# --- Contrôle temporaire des dépendances de localisation (non bloquant) ---
+# Confirme, dans les logs de l'App Lab, qu'OpenCV/NumPy sont bien installés
+# DANS LE CONTENEUR de l'app. À retirer une fois la localisation en place.
+try:
+  import cv2
+  import numpy as np
+  print(f"[localisation] OpenCV {cv2.__version__} / NumPy {np.__version__} disponibles", flush=True)
+except Exception as e:
+  print(f"[localisation] Dépendances manquantes ({e}) — vérifier python/requirements.txt", flush=True)
+
 ui = WebUI()
 detection_stream = VideoObjectDetection(confidence=0.5, debounce_sec=0.0)
 

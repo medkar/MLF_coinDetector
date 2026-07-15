@@ -1,0 +1,4 @@
+# Dépendances Python de l'app (installées automatiquement par l'App Lab dans le conteneur)
+# Localisation cartésienne du palet : calcul d'homographie / solvePnP / dé-distorsion
+numpy
+opencv-python-headless
