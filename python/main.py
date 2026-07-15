@@ -18,8 +18,7 @@ log = Logger("localisation")
 
 ui = WebUI()
 
-# Caméra partagée : passée au brick de détection, et réutilisée pour capturer
-# des images de calibration.
+# Caméra partagée : passée au brick de détection, et réutilisée pour la calibration.
 cam = Camera()
 detection_stream = VideoObjectDetection(camera=cam, confidence=0.5, debounce_sec=0.0, camera_preview=True)
 
@@ -30,19 +29,108 @@ CALIB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "calibrati
 H_current = None        # np.ndarray 3x3 ou None
 square_mm_current = None
 
+# --- Paramètres de l'affinage OpenCV (ajustables d'après les logs) ---
+REFINE_ROI = 70   # demi-fenêtre d'analyse autour du centre FOMO (px)
+HUE_TOL = 15      # tolérance de teinte (OpenCV: 0-179)
+SAT_MIN = 60      # saturation minimale d'un pixel "coloré"
+VAL_MIN = 40      # valeur (luminosité) minimale
+MIN_AREA = 20     # aire minimale du contour retenu (px²)
+
 
 # ---------------------------------------------------------------------------
-# Détection (existant) + diagnostic bbox
+# Affinage : centre sub-pixel du disque coloré autour de la cellule FOMO
+# ---------------------------------------------------------------------------
+def refine_center(frame_bgr, bbox):
+  """Retourne (u, v) précis dans l'image, ou (None, None) si échec.
+
+  On échantillonne la couleur au centre de la cellule FOMO, puis on segmente
+  le disque par proximité de teinte et on prend le centroïde du plus grand
+  contour. Insensible à l'ordre BGR/RGB (comparaison de teinte interne).
+  """
+  x1, y1, x2, y2 = bbox
+  cu = (x1 + x2) / 2.0
+  cv_ = (y1 + y2) / 2.0
+  h, w = frame_bgr.shape[:2]
+  x0 = int(max(0, cu - REFINE_ROI)); xe = int(min(w, cu + REFINE_ROI))
+  y0 = int(max(0, cv_ - REFINE_ROI)); ye = int(min(h, cv_ + REFINE_ROI))
+  roi = frame_bgr[y0:ye, x0:xe]
+  if roi.size == 0:
+    return None, None
+
+  hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+  # graine : teinte médiane d'un petit patch au centre de la ROI
+  pcx = roi.shape[1] // 2
+  pcy = roi.shape[0] // 2
+  patch = hsv[max(0, pcy - 3):pcy + 4, max(0, pcx - 3):pcx + 4].reshape(-1, 3)
+  seed_h = float(np.median(patch[:, 0]))
+
+  hue = hsv[:, :, 0].astype(np.int16)
+  dh = np.abs(hue - seed_h)
+  dh = np.minimum(dh, 180 - dh)  # distance circulaire de teinte
+  mask = ((dh <= HUE_TOL) & (hsv[:, :, 1] >= SAT_MIN) & (hsv[:, :, 2] >= VAL_MIN))
+  mask = (mask.astype(np.uint8)) * 255
+  mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+
+  cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+  if not cnts:
+    return None, None
+  c = max(cnts, key=cv2.contourArea)
+  if cv2.contourArea(c) < MIN_AREA:
+    return None, None
+  m = cv2.moments(c)
+  if m["m00"] == 0:
+    return None, None
+  ru = m["m10"] / m["m00"]
+  rv = m["m01"] / m["m00"]
+  return x0 + ru, y0 + rv
+
+
+def _pixel_to_mm(u, v):
+  if H_current is None or u is None:
+    return None, None
+  pt = np.array([[[float(u), float(v)]]], dtype=np.float64)
+  xy = cv2.perspectiveTransform(pt, H_current).reshape(2)
+  return round(float(xy[0]), 1), round(float(xy[1]), 1)
+
+
+# ---------------------------------------------------------------------------
+# Détection -> affinage -> localisation (X, Y) mm -> UI
 # ---------------------------------------------------------------------------
 def send_detections_to_ui(detections: dict, frame=None):
+  img = None
+  if frame is not None:
+    try:
+      img = cv2.imdecode(np.frombuffer(frame, np.uint8), cv2.IMREAD_COLOR)
+    except Exception as e:
+      log.warning(f"[loc] décodage image échoué: {e}")
+
   for key, values in detections.items():
     for value in values:
       bbox = value.get("bounding_box_xyxy")
-      log.info(f"[diag] label={key} bbox_xyxy={bbox} conf={value.get('confidence')}")
+      u = v = None
+      refined = False
+      if img is not None and bbox is not None:
+        try:
+          u, v = refine_center(img, bbox)
+          refined = u is not None
+        except Exception as e:
+          log.warning(f"[loc] affinage échoué: {e}")
+      if u is None and bbox is not None:  # repli : centre de la cellule FOMO
+        u = (bbox[0] + bbox[2]) / 2.0
+        v = (bbox[1] + bbox[3]) / 2.0
+
+      X, Y = _pixel_to_mm(u, v)
+      upx = None if u is None else round(u, 1)
+      vpx = None if v is None else round(v, 1)
+      log.info(f"[loc] label={key} conf={value.get('confidence'):.2f} px=({upx},{vpx}) affiné={refined} mm=({X},{Y})")
+
       entry = {
         "content": key,
         "confidence": value.get("confidence"),
         "bbox": bbox,
+        "u": upx, "v": vpx,
+        "X": X, "Y": Y,
+        "refined": refined,
         "timestamp": datetime.now(UTC).isoformat()
       }
       ui.send_message("detection", message=entry)
@@ -122,7 +210,6 @@ def on_calib_compute(sid, payload):
     src = np.array(points, dtype=np.float32)
     dst = _world_corners(square_mm)
     H = cv2.getPerspectiveTransform(src, dst)
-    # erreur de reprojection : on remappe les 4 pixels cliqués et on compare aux coins réels
     mapped = cv2.perspectiveTransform(src.reshape(-1, 1, 2), H).reshape(-1, 2)
     err = float(np.max(np.linalg.norm(mapped - dst, axis=1)))
     data = {
@@ -155,10 +242,8 @@ def on_calib_test_point(sid, payload):
   try:
     u = float(payload.get("u"))
     v = float(payload.get("v"))
-    pt = np.array([[[u, v]]], dtype=np.float64)
-    xy = cv2.perspectiveTransform(pt, H_current).reshape(2)
-    ui.send_message("calib_test_result", message={"ok": True, "u": u, "v": v,
-                                                  "X": round(float(xy[0]), 1), "Y": round(float(xy[1]), 1)})
+    X, Y = _pixel_to_mm(u, v)
+    ui.send_message("calib_test_result", message={"ok": True, "u": u, "v": v, "X": X, "Y": Y})
   except Exception as e:
     ui.send_message("calib_test_result", message={"ok": False, "error": str(e)})
 
