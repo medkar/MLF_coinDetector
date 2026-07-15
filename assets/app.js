@@ -327,16 +327,67 @@ ui.on_message('calib_frame', message => {
 ui.on_message('calib_result', message => {
   if (!message || !message.ok) {
     calibrated = false;
-    calibStatus.textContent = 'Échec calibration : ' + ((message && message.error) || 'inconnu');
+    const err = 'Échec calibration : ' + ((message && message.error) || 'inconnu');
+    calibStatus.textContent = err;
+    if (calibPuckStatus) calibPuckStatus.textContent = err;
     return;
   }
   calibrated = true;
   calibStatus.textContent = 'Calibration enregistrée. Clique n’importe où sur l’image pour tester (mm).';
   calibResult.textContent = `Erreur de reprojection max : ${message.error_mm} mm`;
+  if (calibPuckStatus && puckPoints.length >= 4) {
+    calibPuckStatus.textContent = 'Calibration par palet enregistrée. Refais le tableau de mesures pour vérifier.';
+    puckPoints = [];
+    updatePuckBtn();
+  }
 });
 
 ui.on_message('calib_test_result', message => {
   if (!message || !message.ok) return;
   testPoints.push({ u: message.u, v: message.v, X: message.X, Y: message.Y });
   calibRedraw();
+});
+
+// --- Calibration par palet (annule la parallaxe) ---
+const calibPuckBtn = document.getElementById('calibPuckBtn');
+const calibPuckResetBtn = document.getElementById('calibPuckResetBtn');
+const calibPuckStatus = document.getElementById('calibPuckStatus');
+let puckPoints = [];
+const PUCK_CORNERS = ['haut-gauche', 'haut-droit', 'bas-droit', 'bas-gauche'];
+
+function updatePuckBtn() {
+  if (calibPuckBtn) calibPuckBtn.textContent = `Capturer coin (${puckPoints.length}/4)`;
+}
+
+if (calibPuckBtn) {
+  calibPuckBtn.addEventListener('click', () => {
+    if (puckPoints.length >= 4) return;
+    calibPuckStatus.textContent = `Capture du coin « ${PUCK_CORNERS[puckPoints.length]} »…`;
+    ui.send_message('calib_get_refined', {});
+  });
+}
+
+if (calibPuckResetBtn) {
+  calibPuckResetBtn.addEventListener('click', () => {
+    puckPoints = [];
+    updatePuckBtn();
+    calibPuckStatus.textContent = 'Réinitialisé. Place le palet au coin haut-gauche et capture.';
+  });
+}
+
+ui.on_message('calib_refined', message => {
+  if (!message || !message.ok) {
+    calibPuckStatus.textContent = 'Échec : ' + ((message && message.error) || 'pas de détection');
+    return;
+  }
+  const corner = PUCK_CORNERS[puckPoints.length];
+  puckPoints.push([message.u, message.v]);
+  updatePuckBtn();
+  if (puckPoints.length < 4) {
+    calibPuckStatus.textContent = `Coin « ${corner} » capturé à px (${message.u}, ${message.v}). Place le palet au coin « ${PUCK_CORNERS[puckPoints.length]} » puis capture.`;
+  } else {
+    calibPuckStatus.textContent = 'Calcul de l’homographie (par palet)…';
+    const square = parseFloat(calibSquareInput.value) || 174;
+    ui.send_message('calib_compute', { points: puckPoints, square_mm: square });
+  }
 });

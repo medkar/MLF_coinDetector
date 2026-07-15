@@ -127,6 +127,27 @@ SPDX-License-Identifier: MPL-2.0
             height="480"
             style="max-width: 100%; border: 1px solid #ccc; background: #000; cursor: crosshair"></canvas>
         </div>
+
+        <div style="margin-top: 20px; border-top: 1px solid #e0e0e0; padding-top: 14px">
+          <h3 style="margin: 0 0 6px 0">Calibration par palet (recommandée — corrige la parallaxe)</h3>
+          <p class="feedback-text" style="margin: 0">
+            Pose le palet <b>centré sur chaque coin</b> et capture sa position détectée, dans l'ordre :
+            haut-gauche, haut-droit, bas-droit, bas-gauche. Utilise le « Côté du carré » ci-dessus.
+          </p>
+          <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px">
+            <button
+              id="calibPuckBtn"
+              style="padding: 8px 14px; border-radius: 6px; border: 1px solid #008184; background: #008184; color: #fff; cursor: pointer">
+              Capturer coin (0/4)
+            </button>
+            <button
+              id="calibPuckResetBtn"
+              style="padding: 8px 14px; border-radius: 6px; border: 1px solid #008184; background: #fff; color: #008184; cursor: pointer">
+              Recommencer
+            </button>
+          </div>
+          <p id="calibPuckStatus" class="feedback-text" style="margin-top: 10px"></p>
+        </div>
       </div>
 
       <div id="error-container" class="error-message" style="display: none"></div>

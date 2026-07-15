@@ -9,6 +9,7 @@ from arduino.app_peripherals.camera import Camera
 from datetime import datetime, UTC
 
 import os
+import time
 import json
 import base64
 import cv2
@@ -36,6 +37,9 @@ ui.on_message("override_th", on_override_threshold)
 CALIB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "calibration.json")
 H_current = None        # np.ndarray 3x3 ou None
 square_mm_current = None
+
+# Dernière détection affinée (pour la calibration par palet)
+_last_refined = {"u": None, "v": None, "t": 0.0, "label": None, "refined": False}
 
 # --- Paramètres de l'affinage OpenCV (ajustables d'après les logs) ---
 REFINE_ROI = 70   # demi-fenêtre d'analyse autour du centre FOMO (px)
@@ -126,6 +130,9 @@ def send_detections_to_ui(detections: dict, frame=None):
       if u is None and bbox is not None:  # repli : centre de la cellule FOMO
         u = (bbox[0] + bbox[2]) / 2.0
         v = (bbox[1] + bbox[3]) / 2.0
+
+      if u is not None:
+        _last_refined.update({"u": float(u), "v": float(v), "t": time.time(), "label": key, "refined": refined})
 
       X, Y = _pixel_to_mm(u, v)
       upx = None if u is None else round(u, 1)
@@ -256,9 +263,22 @@ def on_calib_test_point(sid, payload):
     ui.send_message("calib_test_result", message={"ok": False, "error": str(e)})
 
 
+def on_calib_get_refined(sid, payload=None):
+  # Renvoie la dernière position affinée du palet, pour calibrer avec le palet
+  # lui-même (annule la parallaxe : points de calibration à la hauteur du palet).
+  if _last_refined["u"] is None or (time.time() - _last_refined["t"]) > 2.0:
+    ui.send_message("calib_refined", message={"ok": False,
+                    "error": "Aucune détection récente du palet (montre-le immobile au coin)."})
+    return
+  ui.send_message("calib_refined", message={"ok": True,
+                  "u": round(_last_refined["u"], 1), "v": round(_last_refined["v"], 1),
+                  "label": _last_refined["label"]})
+
+
 ui.on_message("calib_capture", on_calib_capture)
 ui.on_message("calib_compute", on_calib_compute)
 ui.on_message("calib_test_point", on_calib_test_point)
+ui.on_message("calib_get_refined", on_calib_get_refined)
 
 _load_calibration()
 
