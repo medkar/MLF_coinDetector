@@ -22,3 +22,6 @@ desktop.ini
 
 # Arduino App Lab (fichiers générés sur la carte)
 .cache/
+
+# Calibration propre à la carte / au montage caméra (ne pas versionner)
+calibration.json

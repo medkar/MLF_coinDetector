@@ -101,21 +101,31 @@ SPDX-License-Identifier: MPL-2.0
           <h2 class="recent-scans-title">Calibration (repère palet)</h2>
         </div>
         <div style="display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap">
-          <div style="min-width: 220px">
+          <div style="min-width: 260px; max-width: 340px">
+            <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 10px">
+              <label for="calibSquareInput">Côté du carré (mm)</label>
+              <input id="calibSquareInput" type="number" min="1" step="1" value="174" style="width: 80px; padding: 4px" />
+            </div>
             <button
               id="calibCaptureBtn"
               style="padding: 8px 14px; border-radius: 6px; border: 1px solid #008184; background: #008184; color: #fff; cursor: pointer">
               Capturer une image
             </button>
+            <button
+              id="calibResetBtn"
+              style="padding: 8px 14px; margin-left: 6px; border-radius: 6px; border: 1px solid #008184; background: #fff; color: #008184; cursor: pointer">
+              Recommencer les points
+            </button>
             <p id="calibStatus" class="feedback-text" style="margin-top: 10px">
-              Clique pour capturer une image de la caméra.
+              1) Capture une image. 2) Clique les 4 coins du carré dans l'ordre : haut-gauche, haut-droit, bas-droit, bas-gauche.
             </p>
+            <p id="calibResult" class="feedback-text" style="margin-top: 6px; font-weight: 600"></p>
           </div>
           <canvas
             id="calibCanvas"
             width="640"
             height="480"
-            style="max-width: 100%; border: 1px solid #ccc; background: #000"></canvas>
+            style="max-width: 100%; border: 1px solid #ccc; background: #000; cursor: crosshair"></canvas>
         </div>
       </div>
 

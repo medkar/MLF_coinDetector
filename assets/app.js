@@ -217,15 +217,89 @@ function resetConfidence() {
   updateConfidenceDisplay();
 }
 
-// --- Calibration (étape A) : capture d'une image caméra vers un canvas ---
+// --- Calibration (étapes A + B) : capture, clic des 4 coins -> homographie, test mm ---
 const calibCaptureBtn = document.getElementById('calibCaptureBtn');
+const calibResetBtn = document.getElementById('calibResetBtn');
+const calibSquareInput = document.getElementById('calibSquareInput');
 const calibCanvas = document.getElementById('calibCanvas');
 const calibStatus = document.getElementById('calibStatus');
+const calibResult = document.getElementById('calibResult');
+
+let calibImage = null; // Image capturée
+let calibPoints = []; // 4 coins cliqués [[u,v], ...]
+let calibrated = false; // homographie disponible ?
+let testPoints = []; // points de test { u, v, X, Y }
+
+const CORNER_LABELS = ['haut-gauche', 'haut-droit', 'bas-droit', 'bas-gauche'];
+
+function drawMarker(ctx, u, v, color, label) {
+  ctx.beginPath();
+  ctx.arc(u, v, 5, 0, 2 * Math.PI);
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#000';
+  ctx.stroke();
+  ctx.font = '14px sans-serif';
+  ctx.fillStyle = color;
+  ctx.fillText(label, u + 8, v - 8);
+}
+
+function calibRedraw() {
+  if (!calibCanvas) return;
+  const ctx = calibCanvas.getContext('2d');
+  ctx.clearRect(0, 0, calibCanvas.width, calibCanvas.height);
+  if (calibImage) ctx.drawImage(calibImage, 0, 0, calibCanvas.width, calibCanvas.height);
+  calibPoints.forEach((p, i) => drawMarker(ctx, p[0], p[1], '#00e676', String(i + 1)));
+  testPoints.forEach(t => drawMarker(ctx, t.u, t.v, '#ffd600', `${t.X},${t.Y}mm`));
+}
+
+function canvasToPixel(e) {
+  const rect = calibCanvas.getBoundingClientRect();
+  return [
+    (e.clientX - rect.left) * (calibCanvas.width / rect.width),
+    (e.clientY - rect.top) * (calibCanvas.height / rect.height),
+  ];
+}
 
 if (calibCaptureBtn) {
   calibCaptureBtn.addEventListener('click', () => {
     calibStatus.textContent = 'Capture en cours…';
     ui.send_message('calib_capture', {});
+  });
+}
+
+if (calibResetBtn) {
+  calibResetBtn.addEventListener('click', () => {
+    calibPoints = [];
+    calibrated = false;
+    testPoints = [];
+    calibResult.textContent = '';
+    calibStatus.textContent = 'Clique les 4 coins : ' + CORNER_LABELS.join(', ') + '.';
+    calibRedraw();
+  });
+}
+
+if (calibCanvas) {
+  calibCanvas.addEventListener('click', e => {
+    if (!calibImage) {
+      calibStatus.textContent = 'Capture d’abord une image.';
+      return;
+    }
+    const [u, v] = canvasToPixel(e);
+    if (calibPoints.length < 4) {
+      calibPoints.push([u, v]);
+      calibRedraw();
+      if (calibPoints.length < 4) {
+        calibStatus.textContent = `Point ${calibPoints.length}/4 placé. Suivant : ${CORNER_LABELS[calibPoints.length]}.`;
+      } else {
+        calibStatus.textContent = 'Calcul de l’homographie…';
+        const square = parseFloat(calibSquareInput.value) || 174;
+        ui.send_message('calib_compute', { points: calibPoints, square_mm: square });
+      }
+    } else if (calibrated) {
+      ui.send_message('calib_test_point', { u, v });
+    }
   });
 }
 
@@ -236,10 +310,32 @@ ui.on_message('calib_frame', message => {
   }
   const img = new Image();
   img.onload = () => {
+    calibImage = img;
+    calibPoints = [];
+    calibrated = false;
+    testPoints = [];
+    calibResult.textContent = '';
     calibCanvas.width = message.w;
     calibCanvas.height = message.h;
-    calibCanvas.getContext('2d').drawImage(img, 0, 0, message.w, message.h);
-    calibStatus.textContent = `Image ${message.w}×${message.h} capturée (source : ${message.source}).`;
+    calibRedraw();
+    calibStatus.textContent = `Image ${message.w}×${message.h}. Clique les 4 coins : ${CORNER_LABELS.join(', ')}.`;
   };
   img.src = message.img;
+});
+
+ui.on_message('calib_result', message => {
+  if (!message || !message.ok) {
+    calibrated = false;
+    calibStatus.textContent = 'Échec calibration : ' + ((message && message.error) || 'inconnu');
+    return;
+  }
+  calibrated = true;
+  calibStatus.textContent = 'Calibration enregistrée. Clique n’importe où sur l’image pour tester (mm).';
+  calibResult.textContent = `Erreur de reprojection max : ${message.error_mm} mm`;
+});
+
+ui.on_message('calib_test_result', message => {
+  if (!message || !message.ok) return;
+  testPoints.push({ u: message.u, v: message.v, X: message.X, Y: message.Y });
+  calibRedraw();
 });
