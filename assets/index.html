@@ -95,6 +95,30 @@ SPDX-License-Identifier: MPL-2.0
           </div>
         </div>
       </div>
+
+      <div class="container" id="calibration-container" style="margin-top: 16px">
+        <div class="recent-scans-title-container">
+          <h2 class="recent-scans-title">Calibration (repère palet)</h2>
+        </div>
+        <div style="display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap">
+          <div style="min-width: 220px">
+            <button
+              id="calibCaptureBtn"
+              style="padding: 8px 14px; border-radius: 6px; border: 1px solid #008184; background: #008184; color: #fff; cursor: pointer">
+              Capturer une image
+            </button>
+            <p id="calibStatus" class="feedback-text" style="margin-top: 10px">
+              Clique pour capturer une image de la caméra.
+            </p>
+          </div>
+          <canvas
+            id="calibCanvas"
+            width="640"
+            height="480"
+            style="max-width: 100%; border: 1px solid #ccc; background: #000"></canvas>
+        </div>
+      </div>
+
       <div id="error-container" class="error-message" style="display: none"></div>
     </div>
 

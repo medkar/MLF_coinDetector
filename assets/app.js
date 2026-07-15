@@ -216,3 +216,30 @@ function resetConfidence() {
   confidenceInput.value = '0.50';
   updateConfidenceDisplay();
 }
+
+// --- Calibration (étape A) : capture d'une image caméra vers un canvas ---
+const calibCaptureBtn = document.getElementById('calibCaptureBtn');
+const calibCanvas = document.getElementById('calibCanvas');
+const calibStatus = document.getElementById('calibStatus');
+
+if (calibCaptureBtn) {
+  calibCaptureBtn.addEventListener('click', () => {
+    calibStatus.textContent = 'Capture en cours…';
+    ui.send_message('calib_capture', {});
+  });
+}
+
+ui.on_message('calib_frame', message => {
+  if (!message || !message.ok) {
+    calibStatus.textContent = 'Échec capture : ' + ((message && message.error) || 'inconnu');
+    return;
+  }
+  const img = new Image();
+  img.onload = () => {
+    calibCanvas.width = message.w;
+    calibCanvas.height = message.h;
+    calibCanvas.getContext('2d').drawImage(img, 0, 0, message.w, message.h);
+    calibStatus.textContent = `Image ${message.w}×${message.h} capturée (source : ${message.source}).`;
+  };
+  img.src = message.img;
+});
