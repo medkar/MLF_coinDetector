@@ -150,6 +150,45 @@ SPDX-License-Identifier: MPL-2.0
         </div>
       </div>
 
+      <div class="container" id="servo-container" style="margin-top: 16px">
+        <div class="recent-scans-title-container">
+          <h2 class="recent-scans-title">Servo « flèche » (pointe vers le palet)</h2>
+        </div>
+        <p class="feedback-text" style="margin: 0 0 10px 0">
+          Le servo (signal sur <b>D3</b>) oriente une flèche vers le palet détecté. Renseigne la position du servo
+          dans le repère de la mire (mm) — par défaut au milieu du bord supérieur.
+        </p>
+        <div style="display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start">
+          <div style="display: flex; flex-direction: column; gap: 8px; min-width: 240px">
+            <label><input type="checkbox" id="servoEnabled" checked /> Activer le pointage</label>
+            <div style="display: flex; gap: 8px; align-items: center">
+              <label style="flex: 1">Position servo X (mm)</label>
+              <input id="servoX" type="number" step="1" value="87" style="width: 80px; padding: 4px" />
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center">
+              <label style="flex: 1">Position servo Y (mm)</label>
+              <input id="servoY" type="number" step="1" value="0" style="width: 80px; padding: 4px" />
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center">
+              <label style="flex: 1">Décalage angle (°)</label>
+              <input id="servoOffset" type="number" step="1" value="0" style="width: 80px; padding: 4px" />
+            </div>
+            <label><input type="checkbox" id="servoInvert" /> Inverser le sens</label>
+            <button
+              id="servoSaveBtn"
+              style="padding: 8px 14px; margin-top: 4px; border-radius: 6px; border: 1px solid #008184; background: #008184; color: #fff; cursor: pointer">
+              Enregistrer
+            </button>
+          </div>
+          <div style="min-width: 240px">
+            <p class="feedback-text" style="margin: 0 0 6px 0"><b>Test manuel</b> (vérifier câblage / sens) :</p>
+            <input id="servoTest" type="range" min="0" max="180" value="90" style="width: 100%" />
+            <p id="servoTestLabel" class="feedback-text" style="margin: 6px 0 0 0">Angle test : 90°</p>
+            <p id="servoStatus" class="feedback-text" style="margin: 12px 0 0 0"></p>
+          </div>
+        </div>
+      </div>
+
       <div id="error-container" class="error-message" style="display: none"></div>
     </div>
 

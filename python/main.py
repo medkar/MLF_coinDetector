@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: MPL-2.0
 
-from arduino.app_utils import App, Logger
+from arduino.app_utils import App, Bridge, Logger
 from arduino.app_bricks.web_ui import WebUI
 from arduino.app_bricks.video_objectdetection import VideoObjectDetection
 from arduino.app_peripherals.camera import Camera
@@ -11,6 +11,7 @@ from datetime import datetime, UTC
 import os
 import time
 import json
+import math
 import base64
 import cv2
 import numpy as np
@@ -23,9 +24,8 @@ ui = WebUI()
 cam = Camera()
 detection_stream = VideoObjectDetection(camera=cam, confidence=0.5, debounce_sec=0.0, camera_preview=True)
 
+
 def on_override_threshold(sid, threshold):
-  # Au démarrage, l'UI peut envoyer le seuil avant que le runner du modèle soit
-  # prêt (ws:4912) -> on ignore proprement au lieu de logguer une stack trace.
   try:
     detection_stream.override_threshold(threshold)
   except Exception as e:
@@ -33,13 +33,20 @@ def on_override_threshold(sid, threshold):
 
 ui.on_message("override_th", on_override_threshold)
 
-# État de calibration (homographie pixel -> mm)
+# --- État de calibration (homographie pixel -> mm) ---
 CALIB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "calibration.json")
 H_current = None        # np.ndarray 3x3 ou None
 square_mm_current = None
 
 # Dernière détection affinée (pour la calibration par palet)
 _last_refined = {"u": None, "v": None, "t": 0.0, "label": None, "refined": False}
+
+# --- Servo "flèche" qui pointe vers le palet (piloté via le MCU / Bridge) ---
+SERVO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "servo_config.json")
+# Position du servo dans le repère mm de la mire (par défaut : milieu du bord supérieur).
+SERVO = {"x": 87.0, "y": 0.0, "offset": 0.0, "invert": False, "enabled": True}
+_servo_state = {"angle": None, "t": 0.0}
+MIN_SERVO_INTERVAL = 0.05  # le pont MCU n'a pas de file d'attente : ~20 cmd/s max
 
 # --- Paramètres de l'affinage OpenCV (ajustables d'après les logs) ---
 REFINE_ROI = 70   # demi-fenêtre d'analyse autour du centre FOMO (px)
@@ -53,12 +60,7 @@ MIN_AREA = 20     # aire minimale du contour retenu (px²)
 # Affinage : centre sub-pixel du disque coloré autour de la cellule FOMO
 # ---------------------------------------------------------------------------
 def refine_center(frame_bgr, bbox):
-  """Retourne (u, v) précis dans l'image, ou (None, None) si échec.
-
-  On échantillonne la couleur au centre de la cellule FOMO, puis on segmente
-  le disque par proximité de teinte et on prend le centroïde du plus grand
-  contour. Insensible à l'ordre BGR/RGB (comparaison de teinte interne).
-  """
+  """Retourne (u, v) précis dans l'image, ou (None, None) si échec."""
   x1, y1, x2, y2 = bbox
   cu = (x1 + x2) / 2.0
   cv_ = (y1 + y2) / 2.0
@@ -70,7 +72,6 @@ def refine_center(frame_bgr, bbox):
     return None, None
 
   hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-  # graine : teinte médiane d'un petit patch au centre de la ROI
   pcx = roi.shape[1] // 2
   pcy = roi.shape[0] // 2
   patch = hsv[max(0, pcy - 3):pcy + 4, max(0, pcx - 3):pcx + 4].reshape(-1, 3)
@@ -78,7 +79,7 @@ def refine_center(frame_bgr, bbox):
 
   hue = hsv[:, :, 0].astype(np.int16)
   dh = np.abs(hue - seed_h)
-  dh = np.minimum(dh, 180 - dh)  # distance circulaire de teinte
+  dh = np.minimum(dh, 180 - dh)
   mask = ((dh <= HUE_TOL) & (hsv[:, :, 1] >= SAT_MIN) & (hsv[:, :, 2] >= VAL_MIN))
   mask = (mask.astype(np.uint8)) * 255
   mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
@@ -92,9 +93,7 @@ def refine_center(frame_bgr, bbox):
   m = cv2.moments(c)
   if m["m00"] == 0:
     return None, None
-  ru = m["m10"] / m["m00"]
-  rv = m["m01"] / m["m00"]
-  return x0 + ru, y0 + rv
+  return x0 + m["m10"] / m["m00"], y0 + m["m01"] / m["m00"]
 
 
 def _pixel_to_mm(u, v):
@@ -106,7 +105,51 @@ def _pixel_to_mm(u, v):
 
 
 # ---------------------------------------------------------------------------
-# Détection -> affinage -> localisation (X, Y) mm -> UI
+# Servo : angle de pointage vers le palet + envoi au MCU (débit limité)
+# ---------------------------------------------------------------------------
+def _load_servo_config():
+  try:
+    if os.path.exists(SERVO_PATH):
+      with open(SERVO_PATH, "r", encoding="utf-8") as f:
+        SERVO.update(json.load(f))
+      log.info(f"[servo] config chargée: {SERVO}")
+  except Exception as e:
+    log.error(f"[servo] chargement config échoué: {e}")
+
+
+def _save_servo_config():
+  try:
+    with open(SERVO_PATH, "w", encoding="utf-8") as f:
+      json.dump(SERVO, f, indent=2)
+  except Exception as e:
+    log.error(f"[servo] sauvegarde config échouée: {e}")
+
+
+def compute_servo_angle(xp, yp):
+  # Angle géométrique : 0° = +X (droite), 90° = +Y (vers le bas du repère), 180° = -X (gauche).
+  base = math.degrees(math.atan2(yp - SERVO["y"], xp - SERVO["x"]))
+  ang = SERVO["offset"] + (-base if SERVO["invert"] else base)
+  return int(max(0, min(180, round(ang))))
+
+
+def _servo_send(angle, force=False):
+  now = time.time()
+  if not force and _servo_state["angle"] is not None \
+     and abs(angle - _servo_state["angle"]) < 1 and (now - _servo_state["t"]) < 0.5:
+    return
+  if not force and (now - _servo_state["t"]) < MIN_SERVO_INTERVAL:
+    return
+  try:
+    Bridge.notify("set_servo_angle", int(angle))
+    _servo_state["angle"] = angle
+    _servo_state["t"] = now
+    ui.send_message("servo_state", message={"angle": int(angle)})
+  except Exception as e:
+    log.warning(f"[servo] Bridge.notify a échoué (MCU/sketch prêt ?): {e}")
+
+
+# ---------------------------------------------------------------------------
+# Détection -> affinage -> localisation (X,Y) mm -> UI (+ servo)
 # ---------------------------------------------------------------------------
 def send_detections_to_ui(detections: dict, frame=None):
   img = None
@@ -115,6 +158,8 @@ def send_detections_to_ui(detections: dict, frame=None):
       img = cv2.imdecode(np.frombuffer(frame, np.uint8), cv2.IMREAD_COLOR)
     except Exception as e:
       log.warning(f"[loc] décodage image échoué: {e}")
+
+  best = None  # (confiance, X, Y) du palet le plus sûr -> cible du servo
 
   for key, values in detections.items():
     for value in values:
@@ -135,6 +180,11 @@ def send_detections_to_ui(detections: dict, frame=None):
         _last_refined.update({"u": float(u), "v": float(v), "t": time.time(), "label": key, "refined": refined})
 
       X, Y = _pixel_to_mm(u, v)
+      if X is not None and Y is not None:
+        conf = value.get("confidence") or 0.0
+        if best is None or conf > best[0]:
+          best = (conf, X, Y)
+
       upx = None if u is None else round(u, 1)
       vpx = None if v is None else round(v, 1)
       log.info(f"[loc] label={key} conf={value.get('confidence'):.2f} px=({upx},{vpx}) affiné={refined} mm=({X},{Y})")
@@ -149,6 +199,9 @@ def send_detections_to_ui(detections: dict, frame=None):
         "timestamp": datetime.now(UTC).isoformat()
       }
       ui.send_message("detection", message=entry)
+
+  if SERVO["enabled"] and best is not None:
+    _servo_send(compute_servo_angle(best[1], best[2]))
 
 detection_stream.on_detect_all(send_detections_to_ui)
 
@@ -275,11 +328,45 @@ def on_calib_get_refined(sid, payload=None):
                   "label": _last_refined["label"]})
 
 
+# ---------------------------------------------------------------------------
+# Servo — configuration depuis l'UI + test manuel
+# ---------------------------------------------------------------------------
+def on_servo_get(sid, payload=None):
+  ui.send_message("servo_config", message={"ok": True, **SERVO})
+
+
+def on_servo_config(sid, payload):
+  try:
+    if isinstance(payload, dict):
+      if "x" in payload: SERVO["x"] = float(payload["x"])
+      if "y" in payload: SERVO["y"] = float(payload["y"])
+      if "offset" in payload: SERVO["offset"] = float(payload["offset"])
+      if "invert" in payload: SERVO["invert"] = bool(payload["invert"])
+      if "enabled" in payload: SERVO["enabled"] = bool(payload["enabled"])
+    _save_servo_config()
+    log.info(f"[servo] config mise à jour: {SERVO}")
+    ui.send_message("servo_config", message={"ok": True, **SERVO})
+  except Exception as e:
+    ui.send_message("servo_config", message={"ok": False, "error": str(e)})
+
+
+def on_servo_test(sid, payload):
+  try:
+    angle = int(payload.get("angle")) if isinstance(payload, dict) else int(payload)
+    _servo_send(angle, force=True)
+  except Exception as e:
+    log.warning(f"[servo] test échoué: {e}")
+
+
 ui.on_message("calib_capture", on_calib_capture)
 ui.on_message("calib_compute", on_calib_compute)
 ui.on_message("calib_test_point", on_calib_test_point)
 ui.on_message("calib_get_refined", on_calib_get_refined)
+ui.on_message("servo_get", on_servo_get)
+ui.on_message("servo_config", on_servo_config)
+ui.on_message("servo_test", on_servo_test)
 
 _load_calibration()
+_load_servo_config()
 
 App.run()

@@ -55,6 +55,8 @@ function onUIConnected() {
     errorContainer.style.display = 'none';
     errorContainer.textContent = '';
   }
+  // Récupère la config servo enregistrée pour refléter l'état dans l'UI.
+  ui.send_message('servo_get', {});
 }
 
 function onUIDisconnected() {
@@ -389,5 +391,70 @@ ui.on_message('calib_refined', message => {
     calibPuckStatus.textContent = 'Calcul de l’homographie (par palet)…';
     const square = parseFloat(calibSquareInput.value) || 174;
     ui.send_message('calib_compute', { points: puckPoints, square_mm: square });
+  }
+});
+
+// --- Servo « flèche » : configuration + test manuel ---
+const servoEnabled = document.getElementById('servoEnabled');
+const servoX = document.getElementById('servoX');
+const servoY = document.getElementById('servoY');
+const servoOffset = document.getElementById('servoOffset');
+const servoInvert = document.getElementById('servoInvert');
+const servoSaveBtn = document.getElementById('servoSaveBtn');
+const servoTest = document.getElementById('servoTest');
+const servoTestLabel = document.getElementById('servoTestLabel');
+const servoStatus = document.getElementById('servoStatus');
+
+if (servoSaveBtn) {
+  servoSaveBtn.addEventListener('click', () => {
+    ui.send_message('servo_config', {
+      x: parseFloat(servoX.value) || 0,
+      y: parseFloat(servoY.value) || 0,
+      offset: parseFloat(servoOffset.value) || 0,
+      invert: !!servoInvert.checked,
+      enabled: !!servoEnabled.checked,
+    });
+  });
+}
+
+if (servoEnabled) {
+  servoEnabled.addEventListener('change', () => {
+    ui.send_message('servo_config', { enabled: !!servoEnabled.checked });
+  });
+}
+
+if (servoTest) {
+  let servoTestThrottle = null;
+  servoTest.addEventListener('input', () => {
+    servoTestLabel.textContent = `Angle test : ${servoTest.value}°`;
+    if (servoTestThrottle) return; // limite le débit vers le MCU
+    servoTestThrottle = setTimeout(() => {
+      servoTestThrottle = null;
+    }, 60);
+    ui.send_message('servo_test', { angle: parseInt(servoTest.value, 10) });
+  });
+  // Valeur finale garantie à la fin du geste.
+  servoTest.addEventListener('change', () => {
+    ui.send_message('servo_test', { angle: parseInt(servoTest.value, 10) });
+  });
+}
+
+ui.on_message('servo_config', message => {
+  if (!message) return;
+  if (message.ok === false) {
+    if (servoStatus) servoStatus.textContent = 'Erreur config servo : ' + (message.error || 'inconnue');
+    return;
+  }
+  if (typeof message.x === 'number') servoX.value = message.x;
+  if (typeof message.y === 'number') servoY.value = message.y;
+  if (typeof message.offset === 'number') servoOffset.value = message.offset;
+  if (typeof message.invert === 'boolean') servoInvert.checked = message.invert;
+  if (typeof message.enabled === 'boolean') servoEnabled.checked = message.enabled;
+  if (servoStatus) servoStatus.textContent = 'Config servo à jour.';
+});
+
+ui.on_message('servo_state', message => {
+  if (message && typeof message.angle === 'number' && servoStatus) {
+    servoStatus.textContent = `Angle servo courant : ${message.angle}°`;
   }
 });
