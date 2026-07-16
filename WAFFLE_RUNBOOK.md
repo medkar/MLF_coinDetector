@@ -32,9 +32,10 @@ Ces variables d'env sont déjà dans le `~/.bashrc` du Pi (chargées à chaque c
 
 L'IP est en DHCP. Si `10.191.69.104` ne répond plus, retrouve-la :
 
-**a) Par le hostname (mDNS)** — le plus simple :
+**a) Par le hostname (mDNS)** — le plus simple. Le `-4` force l'**IPv4** : sans lui, Windows
+peut renvoyer l'IPv6 link-local (`fe80::…`), pratique pour SSH mais **pas** pour `WAFFLE_HOST`.
 ```powershell
-ping wafflebot.local
+ping -4 wafflebot.local
 ```
 
 **b) Par scan ARP** (si le `.local` ne résout pas) — remplace `10.191.69` par ton sous-réseau
