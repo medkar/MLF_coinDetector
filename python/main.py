@@ -55,7 +55,7 @@ SERVO_DEADBAND = 2         # ne commande pas le servo pour un changement < ce se
 # --- Téléop ROS2 (branche dev) : le palet agit comme un joystick, envoyé en UDP ---
 # Le noeud ROS2 (mlf_coin_teleop) reçoit {jx, jy} et publie /cmd_vel vers le Waffle.
 ROS_ENABLED = True
-WAFFLE_HOST = "192.168.1.50"   # IP de la machine qui fait tourner le noeud ROS2 (À ADAPTER)
+WAFFLE_HOST = "10.191.69.104"  # IP du Pi du Waffle (fait tourner le noeud mlf_coin_teleop)
 WAFFLE_PORT = 5005
 _ros_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
