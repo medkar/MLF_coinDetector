@@ -61,7 +61,7 @@ WAFFLE_PORT = 5005
 # de lien imposé avec l'"avant" du robot. On inverse chaque axe si besoin (repère mire
 # tourné de 180° par rapport au robot => les deux à True).
 JOY_INVERT_X = False  # True: palet à droite -> le robot tourne à droite
-JOY_INVERT_Y = False  # True: palet vers le haut -> le robot avance
+JOY_INVERT_Y = True   # webcam face à l'opérateur : "haut" physique = bas caméra -> on inverse Y
 _ros_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
 # --- Paramètres de l'affinage OpenCV (ajustables d'après les logs) ---
