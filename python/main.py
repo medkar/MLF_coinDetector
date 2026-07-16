@@ -57,6 +57,11 @@ SERVO_DEADBAND = 2         # ne commande pas le servo pour un changement < ce se
 ROS_ENABLED = True
 WAFFLE_HOST = "10.191.69.104"  # IP du Pi du Waffle (fait tourner le noeud mlf_coin_teleop)
 WAFFLE_PORT = 5005
+# Orientation du joystick : la caméra étant sur le bras, le "haut" de l'image n'a pas
+# de lien imposé avec l'"avant" du robot. On inverse chaque axe si besoin (repère mire
+# tourné de 180° par rapport au robot => les deux à True).
+JOY_INVERT_X = True   # True: palet à droite -> le robot tourne à droite
+JOY_INVERT_Y = True   # True: palet vers le haut -> le robot avance
 _ros_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
 # --- Paramètres de l'affinage OpenCV (ajustables d'après les logs) ---
@@ -188,8 +193,12 @@ def _send_joystick(xp, yp):
     return
   sq = float(square_mm_current or 174.0)
   half = sq / 2.0
-  jx = max(-1.0, min(1.0, (xp - half) / half))   # droite = +1
-  jy = max(-1.0, min(1.0, (half - yp) / half))   # haut / avant = +1
+  jx = max(-1.0, min(1.0, (xp - half) / half))   # droite (repère mire) = +1
+  jy = max(-1.0, min(1.0, (half - yp) / half))   # haut (repère mire) = +1
+  if JOY_INVERT_X:
+    jx = -jx
+  if JOY_INVERT_Y:
+    jy = -jy
   try:
     _ros_sock.sendto(json.dumps({"jx": round(jx, 3), "jy": round(jy, 3)}).encode("utf-8"),
                      (WAFFLE_HOST, WAFFLE_PORT))
