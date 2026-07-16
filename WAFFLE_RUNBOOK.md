@@ -198,9 +198,14 @@ Le robot s'arrête ~0,5 s après la fin de l'envoi (watchdog).
 ROS_ENABLED  = True
 WAFFLE_HOST  = "10.191.69.104"   # IP du Pi (à mettre à jour si le DHCP change)
 WAFFLE_PORT  = 5005
-JOY_INVERT_X = False             # True: inverse gauche/droite
-JOY_INVERT_Y = False             # True: inverse avant/arrière
+JOY_INVERT_X = True              # True: inverse gauche/droite   (réglage validé sur ce montage)
+JOY_INVERT_Y = False             # True: inverse avant/arrière   (réglage validé sur ce montage)
 ```
+
+> Réglage des inversions : chaque flag n'agit **que** sur son axe. Pour caractériser sans
+> se tromper, **ne tourne pas le robot** entre les essais : pose-le avant pointant loin de
+> toi, pousse le palet **tout droit vers le haut** (→ doit avancer), puis **tout droit à
+> droite** (→ doit tourner à droite), et ajuste le flag de l'axe fautif.
 
 **Côté nœud — paramètres ROS2** (défauts, surchargeables au lancement) :
 
