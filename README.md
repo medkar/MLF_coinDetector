@@ -1,21 +1,57 @@
 # MLF CoinDetector
 
-**Proof of concept** for detecting and identifying **colored pucks** ("palets") from the live feed of a USB camera, running on an **Arduino UNO Q** with the **Arduino App Lab**.
+**Proof of concept** running on an **Arduino UNO Q** with the **Arduino App Lab**. From a USB camera feed it:
 
-The end goal is to send the identified pucks (color + position) to a **ROS robot** so it can locate and manipulate them. The ROS part is not implemented yet — this repository currently covers the perception stage only.
+1. **detects and identifies colored pucks** ("palets") with an [Edge Impulse](https://edgeimpulse.com/) model,
+2. **localizes each puck in millimeters** on a calibrated plane (≈ ±1 mm),
+3. points a **servo "arrow"** at the detected puck, and
+4. drives a **TurtleBot3 Waffle** where the puck acts as a **joystick**.
 
-> ⚠️ **Status: proof of concept (POC).** The project started from the Arduino App Lab _"Detect Objects on Camera"_ example and is being adapted. The web UI (animations, texts) is still partly inherited from the original example.
+The long-term goal is a robot arm picking pucks off a conveyor; this POC covers perception, millimeter
+localization, and a validated mobile-robot teleop link.
 
+> ⚠️ **Status: proof of concept.** Started from the Arduino App Lab _"Detect Objects on Camera"_ example
+> and heavily extended. Some web-UI leftovers from the original example may remain.
 
-## Overview
-
-The USB camera feed is analyzed frame by frame by an **object detection model trained on [Edge Impulse](https://edgeimpulse.com/)**, running on the board through the `video_object_detection` Brick. Each detected puck (with its confidence score) is then pushed in real time to a web interface served by the `web_ui` Brick.
+## Pipeline
 
 ```
-USB camera ──► video_object_detection (Edge Impulse model) ──► main.py ──► WebSocket ──► Web UI
-                                                                  │
-                                                                  └──► (planned) publish to a ROS robot
+USB camera ─► video_object_detection (Edge Impulse FOMO) ─► python/main.py
+                                                              ├─ OpenCV sub-pixel refine ─► 4-point homography ─► (X, Y) in mm
+                                                              ├─ Web UI  (detections, calibration, servo config)
+                                                              ├─ Servo "arrow"  ──Bridge/RPC──►  MCU (pin D3)  ─► points at the puck
+                                                              └─ Puck = joystick ──UDP {jx,jy}──► ROS2 node ─► /cmd_vel ─► TurtleBot3 Waffle
 ```
+
+## Features
+
+- **Detection** — Edge Impulse **FOMO** object detection on the board via the `video_object_detection` Brick.
+- **Millimeter localization** — hybrid approach: FOMO gives the coarse cell, **OpenCV** refines the puck
+  center at sub-pixel precision (HSV color segmentation, color auto-sampled so it is BGR/RGB agnostic), and a
+  **4-point homography** maps pixels → millimeters. Reaches **≈ ±1 mm** (center ≈ ±0.5 mm).
+- **Calibration (web UI)** — two modes, persisted to `calibration.json`:
+  - **4-corner click** on a flat target square (174 mm), and
+  - **puck-based** calibration (place the puck at each corner) which **cancels parallax** — the camera is
+    **eye-in-hand** (mounted on the arm tool), measured from a fixed, repeatable observation pose.
+- **Servo pointer** — a servo arrow (signal on **D3**, driven by the MCU over the `Bridge` RPC) always points
+  at the detected puck. Angle computed relative to the **field center** (robust to servo placement), **EMA
+  smoothed**; servo position configurable in the UI, persisted to `servo_config.json`.
+- **ROS2 Waffle teleop** — the puck's position relative to the field center is sent as a `{jx, jy}` joystick
+  over **UDP**; a ROS2 node maps it to `/cmd_vel` and drives a **TurtleBot3 Waffle**. Validated end-to-end.
+
+## Repository layout
+
+| Path | What |
+|---|---|
+| [`python/main.py`](python/main.py) | App backend: detection, refinement, homography, calibration, servo, ROS UDP |
+| [`python/requirements.txt`](python/requirements.txt) | Python deps installed in the App Lab container (`numpy`, `opencv-python-headless`) |
+| [`assets/`](assets/) | Web UI (`index.html`, `app.js`): live detections, calibration canvas, servo panel |
+| [`sketch/`](sketch/) | MCU sketch (Zephyr) driving the pointer servo on D3 (pins `Servo (1.3.0)` library) |
+| [`ros2/mlf_coin_teleop/`](ros2/mlf_coin_teleop/) | ROS2 package (`joystick_teleop` node) — UDP `{jx,jy}` → `/cmd_vel` |
+| [`ros2/README.md`](ros2/README.md) | ROS2 package doc (build, params) |
+| [`WAFFLE_RUNBOOK.md`](WAFFLE_RUNBOOK.md) | Full Waffle operating runbook (IP, SSH, bringup, node, troubleshooting, from-scratch reinstall) |
+
+`calibration.json` and `servo_config.json` are **board-specific and git-ignored**.
 
 ## Model
 
@@ -28,85 +64,75 @@ bricks:
   - arduino:web_ui: {}
 ```
 
-To retrain / update the model, edit the corresponding Edge Impulse project and replace the model id above.
+FOMO quantizes the centroid to a grid cell (≈ 40 px on 640×480), which is why localization adds the OpenCV
+sub-pixel refinement on top. A **160×160** input resolution (retrained with corner/edge images) detects across
+the whole field; 96×96 was too coarse. The homography/refinement work on the 640×480 image and are
+**independent of the model resolution** (no recalibration needed when swapping models).
 
-## Bricks Used
+## How the ROS2 teleop works
 
-- **`video_object_detection`** — runs object detection on the camera feed using the Edge Impulse model.
-- **`web_ui`** — serves the web interface and handles real-time (WebSocket) communication with the backend.
+The puck acts as a joystick. `python/main.py` normalizes the puck position against the field center and sends
+a UDP datagram to the Pi running the ROS2 node:
 
-## Hardware and Software Requirements
+- payload: JSON `{"jx": <-1..1>, "jy": <-1..1>}` on **UDP port 5005**
+- `jy > 0` → robot **forward**, `jx > 0` → **turn right** (Waffle is differential; a diagonal = drive + turn)
+- **safety**: no packet for `0.5 s` → the node publishes a zero `Twist` (robot stops)
+
+Set in `python/main.py`: `WAFFLE_HOST` (the Pi's IP), and per-axis `JOY_INVERT_X` / `JOY_INVERT_Y` toggles.
+See [`WAFFLE_RUNBOOK.md`](WAFFLE_RUNBOOK.md) to bring up the robot and [`ros2/README.md`](ros2/README.md) for
+the node.
+
+## Hardware and software requirements
 
 ### Hardware
-
 - [Arduino® UNO Q](https://store.arduino.cc/products/uno-q) (or Arduino VENTUNO Q)
-- USB camera (x1)
-- USB-C® hub adapter with external power (x1) _(UNO Q only)_
-- A power supply (5 V, 3 A) for the USB hub, e.g. a phone charger _(UNO Q only)_
+- USB camera (720p used here at 640×480; 1080p also available), mounted eye-in-hand
+- USB-C® hub with external power (5 V, 3 A) _(UNO Q only)_
+- Calibration target: a **174 mm square** with 4 markers (a Niryo calibration board was used)
+- A test puck (label `redCoin`, ⌀32 mm × 10 mm)
+- **Servo** (arrow pointer) on pin D3
+- **TurtleBot3 Waffle** _(for the ROS2 teleop stage)_
 - A personal computer with internet access
 
 ### Software
+- Arduino App Lab (run the App in **Network Mode** — it needs the USB hub + camera)
+- ROS2 **Humble** on the Waffle's Raspberry Pi (already set up — see [`WAFFLE_RUNBOOK.md`](WAFFLE_RUNBOOK.md))
 
-- Arduino App Lab
+## How to use
 
-> **Note:** the App must be run in **Network Mode** in the Arduino App Lab, since it requires a USB-C hub and a USB camera.
+1. Connect the USB-C hub to the UNO Q and plug the USB camera into the hub; attach the external power supply.
+2. Run the App from the Arduino App Lab. It opens in the browser (or open `<board-name>.local:7000`).
+3. Present colored pucks in front of the camera — detections update live.
+4. **Calibrate** from the web UI (4-corner click, or the puck-based mode to cancel parallax) to get positions in mm.
+5. _(optional)_ Configure the **servo** position in the UI so the arrow points at the puck.
+6. _(optional)_ **Waffle teleop**: set `WAFFLE_HOST` to the Pi's IP, start the robot (see the runbook), and the
+   puck drives the robot. ⚠️ Wheels up and low speeds first.
 
-## How to Use
-
-1. Connect the USB-C hub to the UNO Q, then plug the USB camera into the hub.
-   ![Hardware setup](assets/docs_assets/hardware-setup.png)
-2. Attach the external power supply to the USB-C hub to power everything.
-3. Run the App from the Arduino App Lab.
-   ![Arduino App Lab - Run App](assets/docs_assets/launch-app.png)
-4. The App opens automatically in the browser. You can also open it manually at `<board-name>.local:7000` (or `<board-ip-address>:7000`).
-5. Present colored pucks in front of the camera and watch the detections update in real time.
-
-## How It Works
-
-### 🔧 Backend — [`python/main.py`](python/main.py)
-
-- Initializes the Bricks:
-  - `ui = WebUI()` — channel to push messages to the frontend.
-  - `detection_stream = VideoObjectDetection(confidence=0.5, debounce_sec=0.0)` — runs detection on the video stream.
-- Wires detection events to the UI via an `on_detect_all` callback: for each detected object, sends `{ content, confidence, timestamp }` on the `detection` channel.
-- Listens for the `override_th` message to adjust the **confidence threshold** on the fly.
-- Keeps everything alive with `App.run()`.
+## Backend at a glance — [`python/main.py`](python/main.py)
 
 ```python
 ui = WebUI()
-detection_stream = VideoObjectDetection(confidence=0.5, debounce_sec=0.0)
-
-ui.on_message("override_th", lambda sid, threshold: detection_stream.override_threshold(threshold))
-
-def send_detections_to_ui(detections: dict):
-    for key, values in detections.items():
-        for value in values:
-            ui.send_message("detection", message={
-                "content": key,
-                "confidence": value.get("confidence"),
-                "timestamp": datetime.now(UTC).isoformat(),
-            })
-
-detection_stream.on_detect_all(send_detections_to_ui)
-App.run()
+cam = Camera()  # shared: fed to detection and reused for calibration
+detection_stream = VideoObjectDetection(camera=cam, confidence=0.5, debounce_sec=0.0, camera_preview=True)
 ```
 
-### 💻 Frontend — [`assets/index.html`](assets/index.html) + [`assets/app.js`](assets/app.js)
-
-- **Video feed**: an iframe retries `/embed` until the camera stream is available.
-- **Threshold control**: a slider + numeric input + reset button adjust the confidence threshold live (`override_th`).
-- **Recent detections**: shows the last 5 detections with percentage and timestamp.
-- **Connection status**: shows an error banner if the WebSocket connection drops.
+For each detection, the backend refines the center (`refine_center`), maps it to mm (`_pixel_to_mm` via the
+homography), pushes it to the UI, aims the servo (`compute_servo_angle` → Bridge to the MCU), and — if
+enabled — sends the joystick over UDP (`_send_joystick`). Calibration and servo settings are handled through
+`ui.on_message` callbacks and persisted to JSON.
 
 ## Roadmap
 
 - [x] Detect colored pucks with an Edge Impulse model on the UNO Q
 - [x] Real-time visualization in the web UI
-- [ ] Extract the position of the pucks in the frame
-- [ ] Publish the identified pucks (color + position) to a **ROS robot**
-- [ ] Fully adapt the web UI to the use case (remove leftovers from the example)
+- [x] Extract the position of the pucks in **millimeters** (homography + OpenCV refinement)
+- [x] Web-UI calibration (4-corner + puck-based, parallax-corrected)
+- [x] Servo "arrow" pointing at the detected puck
+- [x] Drive a **TurtleBot3 Waffle** with the puck as a joystick (UDP → `/cmd_vel`)
+- [ ] Output positions directly in the **robot frame** (define the 4 corners in robot coordinates)
+- [ ] Real pick-up by a robot **arm** on the conveyor
+- [ ] Fully clean up the web UI (remove leftovers from the example)
 
 ## Credits
 
-Based on the Arduino App Lab _"Detect Objects on Camera"_ example.
-Detection model trained with Edge Impulse.
+Based on the Arduino App Lab _"Detect Objects on Camera"_ example. Detection model trained with Edge Impulse.
